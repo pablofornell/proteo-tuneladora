@@ -2,11 +2,14 @@
 # new_machine.sh — Scaffold a new machine folder for Tuneladora
 #
 # Usage:
-#   ./tools/new_machine.sh <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>]
+#   ./tools/new_machine.sh <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]
 #
 # Options:
-#   --type    Node type: bare-metal (default), vm, lxc, docker
-#   --parent  Parent machine name (required for vm, lxc, and docker)
+#   --type            Node type: bare-metal (default), vm, lxc, docker
+#   --parent          Parent machine name (required for vm, lxc, and docker)
+#   --hosts-children  Force generation of vault/08_CONTAINERS.md for an lxc or
+#                     docker node that itself hosts child machines (e.g. an LXC
+#                     running a Docker engine). bare-metal and vm always get it.
 #
 # Creates the canonical folder and vault structure under the correct path:
 #   bare-metal → machines/<name>/
@@ -23,11 +26,12 @@ set -euo pipefail
 
 MACHINE_TYPE="bare-metal"
 PARENT=""
+HOSTS_CHILDREN=0
 
 # ── Parse arguments ────────────────────────────────────────────────────────────
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>]" >&2
+  echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]" >&2
   exit 1
 fi
 
@@ -44,9 +48,13 @@ while [[ $# -gt 0 ]]; do
       PARENT="$2"
       shift 2
       ;;
+    --hosts-children)
+      HOSTS_CHILDREN=1
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>]" >&2
+      echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]" >&2
       exit 1
       ;;
   esac
@@ -144,38 +152,66 @@ REL_PATH="${MACHINE_DIR#$REPO_ROOT/}"
 
 echo "Creating machine: $MACHINE (type: $MACHINE_TYPE${PARENT:+, parent: $PARENT})"
 echo "Path: $REL_PATH"
-mkdir -p "$VAULT_DIR" "$MACHINE_DIR/TOOLS"
-touch "$MACHINE_DIR/TOOLS/.gitkeep"
+mkdir -p "$VAULT_DIR" "$VAULT_DIR/archive" "$MACHINE_DIR/TOOLS"
+touch "$MACHINE_DIR/TOOLS/.gitkeep" "$VAULT_DIR/archive/.gitkeep"
 
-# ── HIERARCHY.md ───────────────────────────────────────────────────────────────
+# 08_CONTAINERS.md belongs to machines that can host children. bare-metal and vm
+# always can; an lxc/docker leaf only when --hosts-children says so (hef-docker
+# is an LXC that runs a Docker engine and therefore does host children).
+case "$MACHINE_TYPE" in
+  bare-metal|vm) GENERATE_CONTAINERS=1 ;;
+  *)             GENERATE_CONTAINERS=$HOSTS_CHILDREN ;;
+esac
 
-cat > "$MACHINE_DIR/HIERARCHY.md" << HEREDOC
-# $MACHINE — Hierarchy
+# ── STATE.md ───────────────────────────────────────────────────────────────────
+# L1 context: YAML frontmatter + a short body, kept under 2 KB.
+# There is deliberately no `children:` key — the child list is derived from the
+# directory tree, which is the only source of truth for containment.
 
-## Node Type
+cat > "$MACHINE_DIR/STATE.md" << HEREDOC
+---
+machine: $MACHINE
 type: $MACHINE_TYPE
-
-## Parent
 parent: ${PARENT:-null}
-
-## Children
-children: []
-
-## Connection Model
-connection_model: $CONNECTION_MODEL
-
-## Container ID
-# For lxc: Proxmox VMID (e.g. 101). For docker: container name or ID.
 container_id: null
+connection: $CONNECTION_MODEL
+ssh_alias: $MACHINE
+ip: null
+ip_assignment: unknown
+status: unknown
+os: unknown
+depends_on: []
+provides_to: []
+backups:
+  configured: false
+  destination: null
+  last_verified: null
+auto_updates:
+  configured: false
+  tool: null
+  schedule: null
+last_reconciled: $DATE
+---
 
-## Dependencies
-# Service-level dependencies with other machines (not infrastructure hierarchy).
-# Format: "- <machine-name>: <role> — <what this machine uses it for>"
-# Example: "- hef-nas-4800: backup destination — restic repo at /backups/restic/this-machine"
-dependencies: []
+# $MACHINE
 
-## Notes
-*(Populate during setup: IP address, network bridge, port mappings, connectivity quirks)*
+*(One line: what this machine is for. Populate during setup.)*
+
+## Services
+
+| Service | Port | Unit | Status |
+|---------|------|------|--------|
+| *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* |
+
+## Open Issues
+
+- Scaffolded $DATE — not yet set up or reconciled against the live host.
+
+## Read Next
+
+- \`CONTEXT.md\` — purpose, network, quirks
+- \`vault/02_SERVICES.md\` — service detail
+- \`vault/04_NOTES.md\` — warnings and scope limits
 HEREDOC
 
 # ── CLAUDE.md ──────────────────────────────────────────────────────────────────
@@ -256,6 +292,9 @@ cat > "$VAULT_DIR/00_INDEX.md" << HEREDOC
 | [[05_SECURITY]] | SSH access policies, user accounts, restrictions |
 | [[06_BACKUPS]] | Backup jobs, retention, restore procedures, credentials location |
 | [[07_UPDATES]] | Auto-update system, maintenance schedule, manual update procedure |
+| [[08_CONTAINERS]] | Child machines hosted here (parent machines only) |
+| [[09_TROUBLESHOOTING]] | Recurring incidents and their fixes (optional) |
+| \`archive/\` | Rotated task-log entries, one file per quarter (YYYY-QN.md) |
 
 ## Status
 
@@ -330,7 +369,7 @@ cat > "$VAULT_DIR/03_TASK_LOG.md" << HEREDOC
 # $MACHINE — Task Log
 
 > Append-only. Never delete or rewrite past entries.
-> Format: see SPEC.md section 7.
+> Format: see SPEC.md §4 (task log entry format).
 
 ## $DATE — Machine Scaffolded
 **Requested by:** user
@@ -355,8 +394,9 @@ cat > "$VAULT_DIR/04_NOTES.md" << HEREDOC
 - [ ] tuneladora user configured
 - [ ] SSH hardened
 - [ ] System discovered and context files populated
-- [ ] Parent vault (06_CONTAINERS.md) updated${PARENT:+: $PARENT}
-- [ ] REGISTRY.md updated
+- [ ] STATE.md populated
+- [ ] Reconciled against live host (tools/reconcile.sh)
+- [ ] Parent vault (08_CONTAINERS.md) updated${PARENT:+: $PARENT}
 - [ ] Backup job configured (06_BACKUPS.md)
 - [ ] Auto-update system configured (07_UPDATES.md)
 HEREDOC
@@ -493,10 +533,56 @@ cat > "$VAULT_DIR/07_UPDATES.md" << HEREDOC
 - $DATE: File scaffolded. No automatic updates configured yet.
 HEREDOC
 
+# ── 08_CONTAINERS.md (parent machines only) ────────────────────────────────────
+
+if [[ "$GENERATE_CONTAINERS" -eq 1 ]]; then
+cat > "$VAULT_DIR/08_CONTAINERS.md" << HEREDOC
+# $MACHINE — Child Machines
+
+> Last updated: $DATE (scaffolded — populate when children are added)
+>
+> This note documents the children this machine hosts. The authoritative child
+> list is the directory tree (\`VMs/\`, \`CTs/LXC/\`, \`CTs/Docker/\`); this note adds
+> the operational detail the tree cannot carry.
+
+## Inventory
+
+| Child | Type | ID | Connection | Status | Folder |
+|-------|------|----|------------|--------|--------|
+| *(none yet)* | — | — | — | — | — |
+
+## Lifecycle
+
+*(How children are started, stopped and destroyed from this host — always
+manage a child's lifecycle through this parent, never through the child's own
+connection.)*
+
+\`\`\`bash
+# e.g. Proxmox: pct list / pct start <vmid> / qm list
+# e.g. Docker:  docker ps -a / docker start <name>
+\`\`\`
+
+## Resource Allocation
+
+| Child | CPU | RAM | Disk | Notes |
+|-------|-----|-----|------|-------|
+| *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* |
+
+## History
+
+- $DATE: File scaffolded. No children registered yet.
+HEREDOC
+fi
+
 # ── Done ───────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "Done. Structure created at: $REL_PATH/"
+if [[ "$GENERATE_CONTAINERS" -eq 1 ]]; then
+  echo "Generated vault/08_CONTAINERS.md (this machine can host children)."
+else
+  echo "No vault/08_CONTAINERS.md (leaf node). Re-run with --hosts-children if it hosts children."
+fi
 echo ""
 
 # Print SSH config snippet based on type
@@ -529,7 +615,7 @@ case "$MACHINE_TYPE" in
     echo ""
     echo "Next steps:"
     echo "  1. Follow workflows/ADD_CONTAINER.md: LXC setup workflow"
-    echo "  2. Update HIERARCHY.md with container_id and IP"
+    echo "  2. Update STATE.md with container_id, ip and ip_assignment"
     echo "  3. Tell Tuneladora: 'Container ready for $MACHINE'"
     ;;
   docker)
@@ -547,7 +633,7 @@ case "$MACHINE_TYPE" in
     echo ""
     echo "Next steps:"
     echo "  1. Follow workflows/ADD_CONTAINER.md: Docker setup workflow"
-    echo "  2. Update HIERARCHY.md with container_id"
+    echo "  2. Update STATE.md with container_id and the container's default user"
     echo "  3. Tell Tuneladora: 'Container ready for $MACHINE'"
     ;;
 esac
