@@ -71,6 +71,6 @@ and escalate only when the task demonstrably requires it.
 
 - Sub-agent roles, prompts and pinned models live in `.claude/agents/`. Use those
   definitions; do not improvise a role or a model here.
-- `mcp__perplexity__search_perplexity(query="...", search_focus="internet")`: current
-  versions, changelogs, CVEs, best practices. Prefer it to web search;
-  `search_focus` also takes `scholar`, `wolfram`, `youtube`, `reddit`.
+- Web research uses the built-in `WebSearch` / `WebFetch` for current versions,
+  changelogs, CVEs and upstream docs: search, then fetch the primary source and
+  cite it. Prefer a vendor's own docs over a summary of them.
