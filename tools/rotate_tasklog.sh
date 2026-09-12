@@ -225,12 +225,18 @@ build_header() {
 # Build an archive file header (regenerated on every run; not part of the
 # byte-integrity accounting, which covers entry content only).
 # ---------------------------------------------------------------------------
+# build_archive_header <machine> <vault-relative machine path> <quarter> <count> <first> <last>
+#
+# `mrel` is the machine folder's path relative to machines/, which is the single
+# Obsidian vault root (SPEC.md §7). Links must be path-qualified from there —
+# [[hef-proxmox/CTs/LXC/hef-net/...]], not [[hef-net/...]]. For a root machine the
+# two happen to coincide, which is exactly why the bug was invisible on 3 of 8.
 build_archive_header() {
-  local machine="$1" quarter="$2" count="$3" first="$4" last="$5"
+  local machine="$1" mrel="$2" quarter="$3" count="$4" first="$5" last="$6"
   cat <<EOF
 # $machine — Task Log Archive — $quarter
 
-> Archived entries from [[$machine/vault/03_TASK_LOG]], moved **verbatim** by
+> Archived entries from [[$mrel/vault/03_TASK_LOG]], moved **verbatim** by
 > \`tools/rotate_tasklog.sh\`. Nothing here was reworded, reformatted or translated.
 > Quarter window: $(quarter_range "$quarter"). Entries in this file: $count ($first → $last).
 > Append-only: never edit or delete. Original ordering preserved.
@@ -243,10 +249,12 @@ EOF
 # ---------------------------------------------------------------------------
 rotate_one() {
   local log="$1"
-  local vault_dir machine_dir machine archive_dir
+  local vault_dir machine_dir machine mrel archive_dir
   vault_dir="$(dirname -- "$log")"
   machine_dir="$(dirname -- "$vault_dir")"
   machine="$(basename -- "$machine_dir")"
+  # Vault-relative machine path: the prefix every [[wikilink]] needs (SPEC.md §7).
+  mrel="${machine_dir#"$MACHINES_DIR"/}"
   archive_dir="$vault_dir/archive"
 
   local wd="$TMPDIR_ROOT/$machine"
@@ -452,9 +460,36 @@ rotate_one() {
     cnt="$(grep -c '^## ' "$qbody" || true)"
     first_d="$(index_entries "$qbody" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | head -1)"
     last_d="$(index_entries "$qbody" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | tail -1)"
-    { build_archive_header "$machine" "$q" "$cnt" "${first_d:-?}" "${last_d:-?}"; cat "$qbody"; } > "$wd/arch-$q.md"
+    { build_archive_header "$machine" "$mrel" "$q" "$cnt" "${first_d:-?}" "${last_d:-?}"; cat "$qbody"; } > "$wd/arch-$q.md"
     cp -- "$wd/arch-$q.md" "$archive_dir/$q.md"
   done
+
+  # ---- 9b. Refresh EVERY archive header, not only the quarters touched now -----
+  # The header is a tool-managed region (back-link, entry count, date range). If it
+  # were only rebuilt for quarters receiving new entries, a change to the header
+  # format would never reach an archive that has stopped growing — which is exactly
+  # how the machine-name-qualified wikilinks survived a rotation. The entry region
+  # below the header is copied through byte-for-byte and never touched.
+  local arch_header_changed=0
+  if [[ -d "$archive_dir" ]]; then
+    local af aq afirst acnt afd ald
+    for af in "$archive_dir"/*.md; do
+      [[ -e "$af" ]] || continue
+      aq="$(basename -- "$af" .md)"
+      afirst="$(index_entries "$af" | awk -F'\t' '$1 != "HEADER_END" { print $2; exit }')"
+      [[ -n "$afirst" ]] || continue
+      sed -n "${afirst},\$p" "$af" > "$wd/reh-$aq.body"
+      acnt="$(grep -c '^## ' "$wd/reh-$aq.body" || true)"
+      afd="$(index_entries "$wd/reh-$aq.body" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | head -1)"
+      ald="$(index_entries "$wd/reh-$aq.body" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | tail -1)"
+      { build_archive_header "$machine" "$mrel" "$aq" "$acnt" "${afd:-?}" "${ald:-?}"
+        cat "$wd/reh-$aq.body"; } > "$wd/reh-$aq.md"
+      if ! cmp -s "$wd/reh-$aq.md" "$af"; then
+        cp -- "$wd/reh-$aq.md" "$af"
+        arch_header_changed=1
+      fi
+    done
+  fi
 
   # ---- 10. Write the log with a fresh archive index ---------------------------
   local index_block="$wd/index_block.md"
@@ -478,11 +513,11 @@ rotate_one() {
         cnt="$(grep -c '^## ' "$f" || true)"
         lo="$(index_entries "$f" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | head -1)"
         hi="$(index_entries "$f" | awk -F'\t' '$1 != "HEADER_END" { print $4 }' | grep -v '^-$' | sort | tail -1)"
-        printf '| [[%s/vault/archive/%s]] | %s | %s → %s |\n' "$machine" "$qname" "$cnt" "${lo:-?}" "${hi:-?}"
+        printf '| [[%s/vault/archive/%s]] | %s | %s → %s |\n' "$mrel" "$qname" "$cnt" "${lo:-?}" "${hi:-?}"
       done
       printf '\n'
       # shellcheck disable=SC2016  # literal backticks for markdown code spans.
-      printf 'Example: `grep -n "2026-05" %s/vault/archive/*.md`\n' "$machine"
+      printf 'Example: `grep -n "2026-05" machines/%s/vault/archive/*.md`\n' "$mrel"
       printf '\n'
       printf 'New entries may be appended above or below this block — the rotator handles both.\n'
     else
@@ -494,7 +529,7 @@ rotate_one() {
   local candidate="$wd/new_log.md"
   cat "$new_header" "$new_body" "$index_block" > "$candidate"
 
-  if cmp -s "$candidate" "$log" && (( moved == 0 )); then
+  if cmp -s "$candidate" "$log" && (( moved == 0 )) && (( arch_header_changed == 0 )); then
     info "      already rotated, no changes"
     return 0
   fi

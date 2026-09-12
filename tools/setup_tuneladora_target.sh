@@ -18,7 +18,8 @@
 #   --group       <name> Additional group to add tuneladora to (e.g. admin for UGOS)
 #
 # The script is idempotent — safe to re-run.
-# The from= restriction on authorized_keys is applied later by the agent (Phase 5).
+# The from= restriction on authorized_keys is applied later by the agent, in the
+# hardening phase: ADD_MACHINE.md Phase 4, ADD_NAS.md Phase 4, ADD_CONTAINER.md Phase C3.
 
 set -euo pipefail
 
@@ -98,4 +99,5 @@ fi
 run "passwd -l tuneladora"
 
 echo "[tuneladora-setup] Done. tuneladora is ready for SSH key-based login."
-echo "[tuneladora-setup] Next: the agent will apply the from= restriction and update ~/.ssh/config (Phase 5)."
+echo "[tuneladora-setup] Next: the agent applies the from= restriction and updates ~/.ssh/config"
+echo "[tuneladora-setup] (ADD_MACHINE.md Phase 4, ADD_NAS.md Phase 4, ADD_CONTAINER.md Phase C3)."

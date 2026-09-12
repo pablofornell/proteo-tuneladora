@@ -17,8 +17,16 @@ no `Edit` or `Write` — so it cannot silently "fix" anything, which is the poin
 Give it:
 
 - the scope (`$machine`, or "all machines")
-- the instruction to run `tools/validate.sh` and `tools/reconcile.sh` (with the
-  machine argument when scoped) and interpret their output
+- the instruction to run both tools and interpret their output. The exact CLIs —
+  every flag below exists, and nothing else does:
+  ```bash
+  ./tools/validate.sh  [--quiet] [--machine <name>]
+  ./tools/reconcile.sh [--machine <name>] [--offline] [--json] [--write]
+  ```
+  Both reject a bare positional name with "Unknown option". Scope with
+  `--machine $machine`; omit it for a full sweep. **Never pass `--write`** from this
+  command — it updates `last_reconciled:` and `status:` in `STATE.md`, which is
+  exactly the silent application this command exists to avoid.
 - the reading tiers: **L1** always (`STATE.md`, `CLAUDE.md`, parent's `STATE.md`),
   **L2** only when a finding touches a service/config/package, **L3 by `grep` only**
   — never a full read of `03_TASK_LOG.md` or `archive/*`. An audit that reads the
@@ -70,7 +78,9 @@ your output — name the file and line.
 
 Only once they have chosen, hand the confirmed corrections to `vault-writer` (for
 documents) or run `/task` (for machines). `last_reconciled` in `STATE.md` is bumped
-only when `reconcile.sh` actually ran against that machine.
+only when `reconcile.sh` actually ran against that machine — either by `vault-writer`
+as part of a confirmed correction, or by the operator running
+`./tools/reconcile.sh --machine <name> --write` themselves.
 
 ## Report
 

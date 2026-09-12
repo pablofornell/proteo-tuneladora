@@ -73,23 +73,43 @@ reading its `STATE.md`; the `machine:` field must equal the name you were given.
 
 `STATE.md` is YAML frontmatter with these keys:
 
+`SPEC.md §1.1` is authoritative. Keys are required, in this canonical order, and the
+enums are **closed** — `tools/validate.sh` FAILs on any other value:
+
 ```yaml
-machine: <name>
+machine: <name>                # must equal the folder name
 type: bare-metal | vm | lxc | docker
-parent: <name or null>
-container_id: <vmid / container name / null>
-connection: ssh | proxyjump | proxycommand-docker-exec
-ssh_alias: <alias in ~/.ssh/config>
-ip: <address>
-ip_assignment: static | dhcp | dhcp-reservation
+parent: <machine name or null> # null only for a root node
+container_id: <LXC VMID (int) | Docker container name (string) | null>
+connection: direct | proxyjump | docker-exec
+ssh_alias: <alias in ~/.ssh/config, or null if not reachable yet>
+ip: <address or null>
+ip_assignment: static | dhcp | none     # "none" = no IP of its own
 status: running | stopped | unknown
-os: <distro + version>
-depends_on: [<machine or service>, ...]
-provides_to: [<machine or service>, ...]
-backups: <yes | no — intentional | destination>
-auto_updates: <yes | no | mechanism>
+os: "<distro + version>"
+depends_on:                    # list of mappings, service-level only
+  - machine: <name that resolves to a real machine folder>
+    role: <e.g. hypervisor, dns, reverse-proxy>
+    detail: "<one line>"
+provides_to:                   # same shape
+  - machine: <name>
+    role: <...>
+    detail: "<...>"
+backups:
+  configured: true | false
+  destination: "<where>" | null
+  last_verified: <YYYY-MM-DD or null>   # a restore/snapshot was actually observed
+auto_updates:
+  configured: true | false
+  tool: <e.g. unattended-upgrades> | null
+  schedule: "<when>" | null
 last_reconciled: <YYYY-MM-DD>
 ```
+
+There is **no `children` key** — the directory tree is the topology, and `validate.sh`
+FAILs if one appears. `depends_on`/`provides_to` are service-level relationships, not
+a restatement of the parent/child tree (`SPEC.md §1.2`); `parent` already carries
+containment. Empty lists are written `[]`.
 
 Never re-derive IP, status, parent or topology from prose in another file. If a fact
 in a vault file contradicts `STATE.md`, `STATE.md` wins and the contradiction is a

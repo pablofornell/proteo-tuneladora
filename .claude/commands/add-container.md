@@ -28,10 +28,17 @@ container into the repo; it does not create one.
 ## Phase A — AGENT: scaffolding
 
 ```bash
-# lxc   → machines/<parent>/CTs/LXC/<name>/
+# lxc    → machines/<parent>/CTs/LXC/<name>/
 # docker → machines/<parent>/CTs/Docker/<name>/
-bash tools/new_machine.sh <name> --type <type> --parent <parent>
+./tools/new_machine.sh <name> --type <type> --parent <parent>
 ```
+
+Add `--hosts-children` **only if this container itself hosts machines** — an LXC
+running a Docker engine, for example. `bare-metal` and `vm` always get
+`vault/08_CONTAINERS.md`; an `lxc`/`docker` leaf gets it only with that flag, and
+`validate.sh` FAILs a machine that has children in the tree but no `08_CONTAINERS.md`.
+The full CLI is `<machine-name> [--type ...] [--parent <name>] [--hosts-children]` —
+there are no other flags.
 
 The script prints an SSH config snippet. **Do not add it to `~/.ssh/config` yet** —
 wait for Phase B to confirm the real IP / container name.
@@ -109,25 +116,62 @@ ssh <name> "which bash python3 curl 2>/dev/null || true"
 
 ## Phase D — AGENT: finalise
 
-1. **[sequential]** Complete `STATE.md` with the Phase B data:
+1. **[sequential]** Complete `STATE.md` with the Phase B data. Keys stay in this
+   canonical order and the enums are closed — `tools/validate.sh` FAILs on any other
+   value (`SPEC.md §1.1`).
+
+   **LXC:**
+
    ```yaml
+   ---
    machine: <name>
-   type: lxc | docker
+   type: lxc                      # bare-metal | vm | lxc | docker
    parent: <parent>
-   container_id: <vmid | container name>
-   connection: proxyjump | proxycommand-docker-exec
+   container_id: 106              # the Proxmox VMID, as an integer
+   connection: proxyjump          # direct | proxyjump | docker-exec
    ssh_alias: <name>
-   ip: <ip>
-   ip_assignment: <static | dhcp | dhcp-reservation>
-   status: running
-   os: <distro + version>
-   depends_on: [<parent>, ...]
+   ip: 192.168.0.10
+   ip_assignment: static          # static | dhcp | none
+   status: running                # running | stopped | unknown
+   os: "Debian 12"
+   depends_on: []                 # service-level only — see below
    provides_to: []
-   backups: <...>
-   auto_updates: <...>
-   last_reconciled: <YYYY-MM-DD>
+   backups:
+     configured: false
+     destination: null
+     last_verified: null
+   auto_updates:
+     configured: true
+     tool: unattended-upgrades
+     schedule: "daily"
+   last_reconciled: 2026-09-12    # YYYY-MM-DD
+   ---
    ```
-   No `children` key anywhere — the folder tree is the topology.
+
+   **Docker** — same shape, with these fields different:
+
+   ```yaml
+   type: docker
+   container_id: my-app-container # the Docker container name, a string
+   connection: docker-exec        # NOT "proxycommand-docker-exec"
+   ip: null
+   ip_assignment: none            # "none" = no IP of its own (host network).
+                                  # Use static/dhcp when it does have one.
+   ```
+
+   - There is **no `children` key** — the directory tree is the topology, and
+     `validate.sh` FAILs if you add one.
+   - `depends_on` / `provides_to` are lists of mappings, and every `machine:` they
+     name must resolve to a real machine folder:
+     ```yaml
+     depends_on:
+       - machine: <parent>
+         role: hypervisor
+         detail: "lifecycle managed with pct on the parent"
+     ```
+     Record a relationship only when it is a real **service-level** dependency
+     (`SPEC.md §1.2`). Plain containment is already carried by `parent` — do not
+     restate the tree here just because this node has one.
 
 2. **[parallel — launch as `machine-operator` subagents in one message]**
    - Populate `CONTEXT.md` and the vault from discovery (OS, resources, network).
@@ -152,8 +196,12 @@ ssh <name> "which bash python3 curl 2>/dev/null || true"
 ## Finish
 
 ```bash
-bash tools/validate.sh <name>
+./tools/validate.sh --machine <name>
+./tools/validate.sh --machine <parent>     # the child changed the parent's records too
 ```
+
+(`validate.sh` takes `--quiet` and `--machine <name>` only; a bare name is rejected
+with "Unknown option". Exit status is 0 when nothing FAILed, 1 otherwise.)
 
 Report the result and print the `/connect <name>` briefing.
 

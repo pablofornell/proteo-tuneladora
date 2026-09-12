@@ -34,15 +34,25 @@ agent is read-only and short-running, so Opus 5 is not warranted.
 
 | Tool | What it does | How to read it |
 |------|--------------|----------------|
-| `tools/validate.sh` | Structural check of the repo: every machine folder has `STATE.md` + `CLAUDE.md`, the canonical vault set is present, `STATE.md` frontmatter keys are complete and well-formed, `parent` points at a folder that exists, `08_CONTAINERS.md` exists on parents and lists the real children. | Emits `PASS` / `WARN` / `FAIL` lines. `--quiet` prints only problems. |
-| `tools/reconcile.sh` | Compares `STATE.md` against the live machines (ip, status, os, container_id) and reports differences. | Emits per-machine diffs. It reports; it does not write. |
+| `tools/validate.sh` | Structural check of the repo: required files present, no legacy files left behind, `STATE.md` frontmatter complete and in canonical order with valid enums, referential integrity of `parent`/`depends_on`/`provides_to`, a secret scan over every `*.md` under `machines/`, task-log size, L1 budget, dangling doc references. | `PASS` / `WARN` / `FAIL` lines plus a summary. Exit 0 when nothing FAILed, 1 otherwise. |
+| `tools/reconcile.sh` | Compares `STATE.md` against the live machines (ip, status, os, container_id, units, disk) and reports differences. | Per-machine diffs. It reports; it only writes with `--write`. |
 
-Run them from the repository root:
+Run them from the repository root. **These are the only flags that exist** — both
+tools reject a bare positional machine name with "Unknown option":
 
 ```bash
-bash tools/validate.sh            # or: bash tools/validate.sh <machine>
-bash tools/reconcile.sh           # or: bash tools/reconcile.sh <machine>
+./tools/validate.sh  [--quiet] [--machine <name>]
+./tools/reconcile.sh [--machine <name>] [--offline] [--json] [--write]
 ```
+
+- `--machine <name>` scopes to one machine folder; omit for a full sweep.
+- `validate.sh --quiet` prints only FAIL lines plus the summary.
+- `reconcile.sh --offline` skips all SSH (vault-internal consistency only) — use it
+  when you must not touch the network.
+- **Never pass `reconcile.sh --write`.** It updates `last_reconciled:` and `status:`
+  in `STATE.md`, which is precisely the silent application you exist to avoid. If a
+  reconcile write is the right fix, propose it and name the operator as the one who
+  runs it.
 
 If a tool is missing or not executable, report that as the finding and stop — do not
 reimplement it inline.
@@ -110,8 +120,8 @@ machine as a doc edit, or vice versa.
 ```
 status: clean | drift-found | tooling-failed
 ran:
-  - tools/validate.sh <args> (exit <n>)
-  - tools/reconcile.sh <args> (exit <n>)
+  - ./tools/validate.sh <flags> (exit <n>)
+  - ./tools/reconcile.sh <flags> (exit <n>)
 summary: <counts — N FAIL, N WARN, N INFO>
 findings:
   - <the block above, one per finding, FAIL first>

@@ -1,131 +1,203 @@
 # Add a NAS / Appliance — Workflow
 
-## Overview
+NAS devices and other appliances run proprietary operating systems (UGOS, Synology DSM,
+QNAP QTS, TrueNAS, …) that impose restrictions a standard Linux host does not have. This
+document adapts [`ADD_MACHINE.md`](ADD_MACHINE.md) for them.
 
-NAS devices and other appliances run proprietary operating systems (UGOS, Synology DSM, TrueNAS, etc.) that impose restrictions not present in standard Linux. This document adapts the `ADD_MACHINE.md` workflow for these systems.
+Structure (file names, vault numbering, `STATE.md` schema) is defined by
+[`SPEC.md`](../SPEC.md). This document is procedure only.
 
-**Use this document instead of `ADD_MACHINE.md`** when the target machine is:
-- A NAS (UGREEN, Synology, QNAP, TrueNAS, etc.)
-- A router or managed switch with SSH
-- Any appliance where the OS is proprietary or locked
+**Use this instead of `ADD_MACHINE.md`** when the target is:
+
+- a NAS (UGREEN, Synology, QNAP, TrueNAS, …)
+- a router or managed switch with SSH
+- any appliance whose OS is proprietary or locked
+
+**Running this with an agent:** there is no dedicated slash command — drive it with
+`/add-machine <name>` ([`.claude/commands/add-machine.md`](../.claude/commands/add-machine.md))
+and substitute the phases below, or run it by hand. Execution on the appliance belongs to
+the `machine-operator` subagent and vault writes to `vault-writer`
+([`.claude/agents/`](../.claude/agents/)); those definitions own the orchestration
+protocol.
+
+**Reference implementation:** `machines/hef-nas-4800/` — a UGREEN DXP4800 on UGOS,
+migrated to the current format. Its `STATE.md`, `vault/04_NOTES.md` and
+`vault/05_SECURITY.md` are the worked example for everything below. Read it by tier
+(`SPEC.md §3`), not whole.
 
 ---
 
 ## Key differences from standard Linux
 
-| Aspect | Standard Linux | NAS / Appliance |
-|--------|---------------|-----------------|
-| Shell access | Any user with shell | May require specific group membership (e.g. `admin`) |
-| rsync / SFTP / SCP | Works with any path | May be wrapped — restricted to registered shares |
-| Package manager | apt / yum | Usually unavailable or restricted |
-| Kernel updates | Via apt | Tied to OS firmware updates |
-| sudoers | Direct edit | May be managed by appliance OS |
+| Aspect | Standard Linux | NAS / appliance |
+|--------|----------------|-----------------|
+| Shell access | Any user with a shell | May require specific group membership (e.g. `admin`) |
+| rsync / SFTP / SCP | Any path | May be wrapped — restricted to registered shares |
+| Package manager | apt / dnf | Usually unavailable or restricted |
+| Kernel updates | Via the package manager | Tied to vendor firmware updates |
+| sudoers | Direct edit | May be managed by the appliance OS |
 | File transfer destination | Any writable path | Must be a share registered in the appliance UI |
+
+Appliances are almost always root nodes: `type: bare-metal`, `parent: null`,
+`connection: direct` in `STATE.md`. `auto_updates.configured: false` with `tool: null` is
+the honest value when firmware updates are manual — record that rather than leaving the
+scaffold.
 
 ---
 
-## Phases
+## Phase 1 — Agent: scaffold the structure
 
-### Phase 1 — I scaffold the structure
+Same as `ADD_MACHINE.md` Phase 1:
 
-Same as `ADD_MACHINE.md` Phase 1: `tools/new_machine.sh <name> --type bare-metal`.
+```bash
+bash tools/new_machine.sh <name> --type bare-metal
+```
 
-### Phase 2 — You verify SSH access
+An appliance that hosts its own Docker containers or VMs as managed machines keeps
+`vault/08_CONTAINERS.md` (bare-metal always gets it).
 
-Connect with your personal user (admin account on the appliance):
+---
+
+## Phase 2 — Operator: verify SSH access
+
+Connect with the appliance's own admin account:
 
 ```bash
 ssh <admin-user>@<ip>
 ```
 
-Most NAS systems use password auth by default. Confirm you can connect.
+Most NAS systems use password auth by default. Confirm the connection works before going
+further.
 
-### Phase 3 — Create the `tuneladora` user + install key
+---
+
+## Phase 3 — Create the `tuneladora` user and install the key
 
 **Agent prepares (locally):**
+
 ```bash
 bash tools/setup_tuneladora_control.sh --machine <name> --group admin
+scp tools/setup_tuneladora_target.sh <admin-user>@<ip>:/tmp/
 ```
-This generates the SSH key and prints the exact command to hand to the admin.
+
+This generates `~/.ssh/tuneladora_<name>`, prints the public key and its fingerprint, and
+prints the exact command to hand to the admin.
 
 **Admin runs (one command on the NAS, with sudo):**
+
 ```bash
 sudo bash /tmp/setup_tuneladora_target.sh --pubkey 'ssh-ed25519 AAAA...' --group admin
 ```
 
-The `--group admin` flag adds `tuneladora` to the `admin` group, which is required for interactive SSH shell access on UGOS. For other appliances, omit the flag unless the vendor requires group membership for SSH.
+`--group admin` adds `tuneladora` to the `admin` group, which is **required for
+interactive SSH shell access on UGOS**. For other appliances, omit the flag unless the
+vendor requires group membership for SSH.
 
-> **UGOS note:** if `useradd` is not available on the appliance (some firmware versions restrict it), create the user first via the UGOS admin panel (**Control Panel → Users**), add it to the `admin` group there, then run the script with `--pubkey` only — the script is idempotent and will skip user creation if the user already exists.
+> **UGOS note:** if `useradd` is unavailable (some firmware versions restrict it), create
+> the user first in the UGOS admin panel (**Control Panel → Users**), add it to the
+> `admin` group there, and then run the script with `--pubkey` only. The script is
+> idempotent and skips user creation when the user already exists.
 
-> **Phase 4 from `ADD_MACHINE.md` is not needed here** — the script installs the public key directly into `authorized_keys`, so `ssh-copy-id` is unnecessary.
+> `ssh-copy-id` is never needed — the script installs the public key into
+> `authorized_keys` directly.
 
-### Phase 5 — Harden and verify
+---
+
+## Phase 4 — Harden and verify
 
 ```bash
-# Discover subnet and harden authorized_keys
+# Discover the subnet from the operator's current network — never hardcode it
 SUBNET=$(ip -4 addr show scope global | awk '/inet / {split($2,a,"."); print a[1]"."a[2]"."a[3]".*"}' | head -1)
 PUBKEY=$(cat ~/.ssh/tuneladora_<name>.pub)
 ssh tuneladora@<ip> "echo 'from=\"$SUBNET\",no-agent-forwarding,no-X11-forwarding $PUBKEY' > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 
-# Test
+# Update ~/.ssh/config to User tuneladora + IdentityFile ~/.ssh/tuneladora_<name>, then
 ssh <name> "echo ok && whoami"
 ```
 
-### Phase 6 — Discover system info and populate context
-
-Same as `ADD_MACHINE.md` Phase 5 (steps 6–9): discover OS, hardware, network, populate vault.
-
-> **Multi-agent note:** Once SSH connection is confirmed (step 5), launch discovery (01_SYSTEM_INFO.md), CONTEXT.md population, and 05_SECURITY.md update as parallel Haiku sub-agents. Log the full setup (03_TASK_LOG.md) after all three complete. See CLAUDE.md for orchestration details.
+`whoami` must return `tuneladora`; never connect as `root` (a `PreToolUse` hook blocks
+it). Re-run the `from=` step from any new network the operator moves to.
 
 ---
 
-## UGOS-specific: File transfer restrictions
+## Phase 5 — Discover and populate
 
-UGOS replaces rsync, SFTP, and SCP with proprietary wrappers (`ug_start_server`) that **only allow access to shares registered in the admin panel**. Raw paths like `/volume1/mydir` are rejected unless `mydir` is a registered share.
+Same discovery as `ADD_MACHINE.md` Phase 4, steps 4–12. The independent parts —
+`01_SYSTEM_INFO.md`, `CONTEXT.md`, `05_SECURITY.md` — can run concurrently; delegate per
+the `machine-operator` definition instead of improvising roles, then log the setup in
+`03_TASK_LOG.md` once they are all done.
+
+For an appliance, these matter more than on a normal host:
+
+- `CONTEXT.md` → **Known Quirks**: ForceCommand behaviour, group requirements, share
+  restrictions, anything the vendor does differently.
+- `vault/04_NOTES.md` → every appliance-specific behaviour discovered, including the ones
+  you could not explain.
+- `vault/06_BACKUPS.md` → the appliance's role as a **backup destination**: which
+  machines back up here, the share names, and the real filesystem paths behind them.
+- `CLAUDE.md` → the rule that shares must exist in the admin UI before any file transfer
+  will work.
+
+Secrets — appliance admin passwords, API tokens, share credentials — are never written
+into a file under `machines/`. Record where the live value lives (`SPEC.md §5`); a
+`PreToolUse` hook blocks the write if you try.
+
+---
+
+## Phase 6 — Validate and reconcile (mandatory)
+
+```bash
+tools/validate.sh --machine <name>      # must be 0 FAIL
+tools/reconcile.sh --machine <name>     # record vs. what the appliance actually reports
+```
+
+`reconcile.sh` is read-only over SSH and never writes to the appliance. `--offline` skips
+SSH entirely; `--write` updates only `last_reconciled:` and `status:` in `STATE.md`.
+Expect an appliance to produce findings a Linux host does not — restricted commands,
+missing `systemctl` units, unreadable paths. Record those in `vault/04_NOTES.md` so the
+next run is interpreted correctly instead of re-investigated.
+
+---
+
+## UGOS-specific: file transfer restrictions
+
+UGOS replaces rsync, SFTP and SCP with proprietary wrappers (`ug_start_server`) that
+**only allow access to shares registered in the admin panel**. Raw paths such as
+`/volume1/mydir` are rejected unless `mydir` is a registered share.
 
 **Before setting up any backup or file transfer job targeting the NAS:**
 
-1. Open the UGOS admin panel
-2. Go to **Shared Folders** (or equivalent)
-3. Create a new shared folder (e.g. `backups`)
-4. Grant `tuneladora` read/write permissions on that share
-5. The share will then be accessible at:
+1. Open the UGOS admin panel.
+2. Go to **Shared Folders** (or the equivalent).
+3. Create the shared folder (e.g. `backups`).
+4. Grant `tuneladora` read/write permission on that share.
+5. The share is then reachable at:
    - SFTP path: `/backups/`
-   - rsync path: `/backups/` (via UGOS rsync module)
+   - rsync path: `/backups/` (via the UGOS rsync module)
 
-Document the share name and real filesystem path in `CONTEXT.md` and `vault/06_BACKUPS.md`.
+Document the share name **and** the real filesystem path behind it in `CONTEXT.md` and
+`vault/06_BACKUPS.md`. The two differ, and the difference is what breaks restores.
 
-### Verifying SFTP access after share creation
+### Verifying SFTP access after creating a share
 
 ```bash
 sftp -i ~/.ssh/tuneladora_<name> tuneladora@<ip>
-# Inside sftp:
-ls /          # should list registered shares
+# inside sftp:
+ls /            # should list the registered shares
 mkdir /backups/test
 ls /backups/
 rmdir /backups/test
 ```
 
-### Which protocols are available via UGOS ForceCommand
+### Which protocols are available via the UGOS ForceCommand
 
 | Protocol | Available | Notes |
 |----------|-----------|-------|
-| Interactive shell | Yes | Only if user is in `admin` group |
+| Interactive shell | Yes | Only if the user is in the `admin` group |
 | SFTP | Yes | Only to registered shares |
-| rsync | Yes | Only to registered shares (via UGOS module) |
+| rsync | Yes | Only to registered shares (via the UGOS module) |
 | SCP | Yes | Only to registered shares |
-| Arbitrary commands | Yes | Only if user is in `admin` group |
-
----
-
-## Documenting the machine
-
-Beyond the standard vault, always populate for NAS machines:
-
-- `CONTEXT.md` → Known Quirks: document any ForceCommand, group requirements, share restrictions
-- `vault/04_NOTES.md` → document every appliance-specific behavior discovered
-- `vault/06_BACKUPS.md` → document backup destination role (which services back up here, share names, real paths)
-- `CLAUDE.md` → Machine-Specific Rules: note that shares must be created in the admin UI before file transfer
+| Arbitrary commands | Yes | Only if the user is in the `admin` group |
 
 ---
 
@@ -133,4 +205,4 @@ Beyond the standard vault, always populate for NAS machines:
 
 | Appliance | OS | Notes |
 |-----------|----|-------|
-| UGREEN DXP4800 | UGOS 1.14.1 | Requires `admin` group for SSH; ForceCommand restricts all file ops to registered shares. See `machines/hef-nas-4800/` for reference. |
+| UGREEN DXP4800 | UGOS 1.14.1 | Requires the `admin` group for SSH; ForceCommand restricts every file operation to registered shares. Reference implementation: `machines/hef-nas-4800/`. |

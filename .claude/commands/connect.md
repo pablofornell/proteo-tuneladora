@@ -61,7 +61,8 @@ Status:          <status>  |  OS: <os>
 Services:        <from CLAUDE.md's Services table, comma-separated>
 Depends on:      <depends_on>
 Provides to:     <provides_to>
-Backups:         <backups>   |  Auto-updates: <auto_updates>
+Backups:         <backups.configured; destination; last_verified>
+Auto-updates:    <auto_updates.configured; tool; schedule>
 Open issues:     <from the grep, or "none flagged">
 Rules that matter: <the 2–3 machine-specific rules most likely to bite — the ones
                     about critical services, capabilities, ports, restart-required

@@ -14,7 +14,8 @@
 #   --group       <name>  Pass a --group flag through to the target script (e.g. admin for UGOS)
 #
 # This script is run by the agent on the local control machine.
-# It does NOT modify ~/.ssh/config — the agent handles that in Phase 5.
+# It does NOT modify ~/.ssh/config — the agent handles that in the hardening phase
+# (ADD_MACHINE.md Phase 4, ADD_NAS.md Phase 4, ADD_CONTAINER.md Phase C3).
 
 set -euo pipefail
 
@@ -89,4 +90,6 @@ fi
 
 echo "================================================================"
 echo ""
-echo "[tuneladora-control] When the admin reports success, tell the agent to proceed to Phase 5."
+echo "[tuneladora-control] Next: the agent applies the from= restriction and updates"
+echo "                     ~/.ssh/config — ADD_MACHINE.md Phase 4, ADD_NAS.md Phase 4,"
+echo "                     ADD_CONTAINER.md Phase C3. Validate with Phase 4b / Phase E."

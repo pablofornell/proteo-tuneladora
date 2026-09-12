@@ -221,8 +221,15 @@ All seven fields are present in every entry. Newest entry at the top of the file
 
 `03_TASK_LOG.md` holds the **5 most recent entries**. When a sixth is added, the oldest
 **moves** to `vault/archive/<YYYY>-Q<N>.md`, chosen by the entry's own date (e.g. an
-entry dated 2026-08-04 goes to `archive/2026-Q3.md`). Within an archive file, newest
-first. Create the archive file on first use.
+entry dated 2026-08-04 goes to `archive/2026-Q3.md`). Create the archive file on first
+use.
+
+Within an archive file, entries keep the **order they had in the log** — they are not
+re-sorted by date. These logs were not always appended chronologically, so sorting would
+change the sequence of historical records, and §4.3 forbids that as much as it forbids
+rewording them. Every entry carries its own date in its heading, and the archive index at
+the end of `03_TASK_LOG.md` gives each file's date range, so nothing is lost by leaving
+the sequence alone. `tools/rotate_tasklog.sh` implements this.
 
 ### 4.3 Append-only, restated
 

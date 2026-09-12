@@ -3,13 +3,19 @@
 #
 # Usage:
 #   ./tools/new_machine.sh <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]
+#   ./tools/new_machine.sh <machine-name> --containers-note
 #
 # Options:
-#   --type            Node type: bare-metal (default), vm, lxc, docker
-#   --parent          Parent machine name (required for vm, lxc, and docker)
-#   --hosts-children  Force generation of vault/08_CONTAINERS.md for an lxc or
-#                     docker node that itself hosts child machines (e.g. an LXC
-#                     running a Docker engine). bare-metal and vm always get it.
+#   --type             Node type: bare-metal (default), vm, lxc, docker
+#   --parent           Parent machine name (required for vm, lxc, and docker)
+#   --hosts-children   Force generation of vault/08_CONTAINERS.md for an lxc or
+#                      docker node that itself hosts child machines (e.g. an LXC
+#                      running a Docker engine). bare-metal and vm always get it.
+#   --containers-note  Retrofit mode: write vault/08_CONTAINERS.md into an
+#                      EXISTING machine folder and do nothing else. Use when a
+#                      leaf node starts hosting children (the hef-docker case)
+#                      and tools/validate.sh FAILs it for the missing note.
+#                      Idempotent: refuses to overwrite an existing file.
 #
 # Creates the canonical folder and vault structure under the correct path:
 #   bare-metal → machines/<name>/
@@ -27,11 +33,12 @@ set -euo pipefail
 MACHINE_TYPE="bare-metal"
 PARENT=""
 HOSTS_CHILDREN=0
+RETROFIT_CONTAINERS=0
 
 # ── Parse arguments ────────────────────────────────────────────────────────────
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]" >&2
+  printf '%b\n' "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]\n       $0 <machine-name> --containers-note   # retrofit vault/08_CONTAINERS.md into an existing machine" >&2
   exit 1
 fi
 
@@ -52,9 +59,13 @@ while [[ $# -gt 0 ]]; do
       HOSTS_CHILDREN=1
       shift
       ;;
+    --containers-note)
+      RETROFIT_CONTAINERS=1
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]" >&2
+      printf '%b\n' "Usage: $0 <machine-name> [--type bare-metal|vm|lxc|docker] [--parent <machine-name>] [--hosts-children]\n       $0 <machine-name> --containers-note   # retrofit vault/08_CONTAINERS.md into an existing machine" >&2
       exit 1
       ;;
   esac
@@ -114,7 +125,9 @@ VAULT_DIR="$MACHINE_DIR/vault"
 
 # ── Guard: already exists ──────────────────────────────────────────────────────
 
-if [[ -d "$MACHINE_DIR" ]]; then
+# Retrofit mode (--containers-note) targets an existing folder on purpose, so
+# this guard applies to the scaffold path only.
+if [[ "$RETROFIT_CONTAINERS" -eq 0 ]] && [[ -d "$MACHINE_DIR" ]]; then
   echo "Error: $MACHINE_DIR already exists. Aborting to avoid overwriting." >&2
   exit 1
 fi
@@ -147,6 +160,98 @@ esac
 # ── Compute relative path for messages ─────────────────────────────────────────
 
 REL_PATH="${MACHINE_DIR#$REPO_ROOT/}"
+
+# ── 08_CONTAINERS.md template (single copy — used by both the scaffold path and
+#    the --containers-note retrofit path; never duplicate this heredoc) ────────
+
+emit_containers_note() {
+  local target="$1"
+  cat > "$target" << HEREDOC
+# $MACHINE — Child Machines
+
+> Last updated: $DATE (scaffolded — populate when children are added)
+>
+> This note documents the children this machine hosts. The authoritative child
+> list is the directory tree (\`VMs/\`, \`CTs/LXC/\`, \`CTs/Docker/\`); this note adds
+> the operational detail the tree cannot carry.
+
+## Inventory
+
+| Child | Type | ID | Connection | Status | Folder |
+|-------|------|----|------------|--------|--------|
+| *(none yet)* | — | — | — | — | — |
+
+## Lifecycle
+
+*(How children are started, stopped and destroyed from this host — always
+manage a child's lifecycle through this parent, never through the child's own
+connection.)*
+
+\`\`\`bash
+# e.g. Proxmox: pct list / pct start <vmid> / qm list
+# e.g. Docker:  docker ps -a / docker start <name>
+\`\`\`
+
+## Resource Allocation
+
+| Child | CPU | RAM | Disk | Notes |
+|-------|-----|-----|------|-------|
+| *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* |
+
+## History
+
+- $DATE: File scaffolded. No children registered yet.
+HEREDOC
+}
+
+# ── Retrofit mode: --containers-note ───────────────────────────────────────────
+# Writes vault/08_CONTAINERS.md into an EXISTING machine folder and exits. Used
+# when a node that was scaffolded as a leaf starts hosting children and
+# tools/validate.sh FAILs it for the missing note. Never overwrites.
+
+if [[ "$RETROFIT_CONTAINERS" -eq 1 ]]; then
+  # The machine may sit anywhere in the tree, so locate it by folder name.
+  FOUND=()
+  while IFS= read -r d; do
+    [[ -n "$d" ]] && FOUND+=("$d")
+  done < <(find "$REPO_ROOT/machines" -name '.git' -prune -o -type d -name "$MACHINE" -print | sort)
+
+  if [[ ${#FOUND[@]} -eq 0 ]]; then
+    echo "Error: machine '$MACHINE' not found under machines/." >&2
+    echo "       --containers-note only retrofits an existing machine folder." >&2
+    exit 1
+  fi
+  if [[ ${#FOUND[@]} -gt 1 ]]; then
+    echo "Error: machine name '$MACHINE' is ambiguous — found:" >&2
+    printf '       %s\n' "${FOUND[@]#"$REPO_ROOT/"}" >&2
+    exit 1
+  fi
+
+  MACHINE_DIR="${FOUND[0]}"
+  VAULT_DIR="$MACHINE_DIR/vault"
+  REL_PATH="${MACHINE_DIR#$REPO_ROOT/}"
+
+  if [[ ! -d "$VAULT_DIR" ]]; then
+    echo "Error: $REL_PATH/vault/ does not exist — is '$MACHINE' really a machine folder?" >&2
+    exit 1
+  fi
+
+  if [[ -e "$VAULT_DIR/08_CONTAINERS.md" ]]; then
+    echo "$REL_PATH/vault/08_CONTAINERS.md already exists — refusing to overwrite."
+    echo "No changes made."
+    exit 0
+  fi
+
+  emit_containers_note "$VAULT_DIR/08_CONTAINERS.md"
+  echo "Created: $REL_PATH/vault/08_CONTAINERS.md"
+  echo ""
+  echo "Next steps:"
+  echo "  1. Fill in the Inventory table with the children already in the tree."
+  echo "  2. Log the change in vault/03_TASK_LOG.md (SPEC.md §4.1)."
+  echo "  3. Re-run: tools/validate.sh --machine $MACHINE"
+  exit 0
+fi
+
 
 # ── Create structure ───────────────────────────────────────────────────────────
 
@@ -536,42 +641,7 @@ HEREDOC
 # ── 08_CONTAINERS.md (parent machines only) ────────────────────────────────────
 
 if [[ "$GENERATE_CONTAINERS" -eq 1 ]]; then
-cat > "$VAULT_DIR/08_CONTAINERS.md" << HEREDOC
-# $MACHINE — Child Machines
-
-> Last updated: $DATE (scaffolded — populate when children are added)
->
-> This note documents the children this machine hosts. The authoritative child
-> list is the directory tree (\`VMs/\`, \`CTs/LXC/\`, \`CTs/Docker/\`); this note adds
-> the operational detail the tree cannot carry.
-
-## Inventory
-
-| Child | Type | ID | Connection | Status | Folder |
-|-------|------|----|------------|--------|--------|
-| *(none yet)* | — | — | — | — | — |
-
-## Lifecycle
-
-*(How children are started, stopped and destroyed from this host — always
-manage a child's lifecycle through this parent, never through the child's own
-connection.)*
-
-\`\`\`bash
-# e.g. Proxmox: pct list / pct start <vmid> / qm list
-# e.g. Docker:  docker ps -a / docker start <name>
-\`\`\`
-
-## Resource Allocation
-
-| Child | CPU | RAM | Disk | Notes |
-|-------|-----|-----|------|-------|
-| *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* | *(TBD)* |
-
-## History
-
-- $DATE: File scaffolded. No children registered yet.
-HEREDOC
+  emit_containers_note "$VAULT_DIR/08_CONTAINERS.md"
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────

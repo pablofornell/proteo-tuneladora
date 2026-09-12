@@ -10,6 +10,19 @@
 # discovery commands over SSH. The only local write it can ever do is --write,
 # which touches nothing but `last_reconciled:` and `status:` in STATE.md.
 #
+# What it checks:
+#   * STATE.md ip / status / os / parent / type against the live host and the
+#     directory tree, plus enum validity and depends_on/provides_to resolution.
+#   * vault/08_CONTAINERS.md against the hypervisor's pct/qm list and against
+#     the child machine folders on disk (undocumented guests, orphan folders).
+#   * Root filesystem usage against a threshold, and the systemd units named in
+#     STATE.md's `## Services` table.
+#   * TOOLS/ against the deployed copies. A repo TOOLS/ copy is NOT evidence of
+#     what is deployed: these are snapshots that nothing keeps in sync, and they
+#     drift silently in both directions. When they differ the tool says so and
+#     stops there — which copy is authoritative is a human judgement, and it is
+#     often the DEPLOYED one that is correct.
+#
 # Usage:
 #   tools/reconcile.sh [--machine <name>] [--offline] [--json] [--write]
 #
@@ -40,7 +53,8 @@ usage() {
 Usage: tools/reconcile.sh [options]
 
   --machine <name>   Reconcile only this machine (folder name).
-  --offline          Skip all SSH. Vault-internal consistency only:
+  --offline          Skip all SSH. Vault-internal consistency only (no live
+                     checks, so no TOOLS/ deployment comparison):
                      directory tree vs STATE.md parent/type, enum validity,
                      depends_on/provides_to resolution, IP collisions,
                      parent 08_CONTAINERS.md vs child folders.
@@ -145,7 +159,13 @@ fm_has_key() {
   fm_block "$1" | grep -qE "^$2:"
 }
 
-# fm_list <state.md> <key> -> one item per line. Handles `k: [a, b]` and block lists.
+# fm_list <state.md> <key> -> one machine name per line.
+# Handles the three shapes these files use:
+#   k: []            /  k: [a, b]
+#   k:\n  - a        (plain scalar items)
+#   k:\n  - machine: a\n    role: ...\n    detail: ...   (mapping items)
+# For mapping items only the `machine:` (or `name:`) key is taken; the item's other
+# attributes are attributes, not references, and must not be resolved as machines.
 fm_list() {
   fm_block "$1" | awk -v k="$2" '
     BEGIN { inlist = 0 }
@@ -172,8 +192,18 @@ fm_list() {
         next
       }
       if (inlist) {
+        # Only a line carrying the "-" starts an item. Indented lines without one
+        # are attributes of the current item (role:, detail:, ...) — skip them.
+        if (line !~ /^[ \t]*-[ \t]*/) next
         v = line
-        gsub(/^[ \t]*-[ \t]*/, "", v)
+        sub(/^[ \t]*-[ \t]*/, "", v)
+        gsub(/[ \t]+$/, "", v)
+        if (v ~ /^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/) {
+          mk = v
+          sub(/[ \t]*:.*$/, "", mk)
+          if (mk != "machine" && mk != "name") next
+          sub(/^[^:]*:[ \t]*/, "", v)
+        }
         gsub(/^[ \t"'\'']+|[ \t"'\'']+$/, "", v)
         if (v != "") print v
       }
@@ -295,8 +325,61 @@ expected_parent_type() {
 }
 
 # ---------------------------------------------------------------------------
+# TOOLS/ deployment mapping.
+#
+# A file in a machine's TOOLS/ folder is a snapshot of something deployed on the
+# live host. Nothing keeps the two in sync. Map repo basename -> the candidate
+# deployed paths; the remote side picks the first one that actually exists.
+# An unrecognised basename yields NO candidates and is reported UNMAPPED rather
+# than guessed at — a wrong guess would produce a false DRIFT.
+# ---------------------------------------------------------------------------
+tool_candidates() {
+  local base="$1" stem
+  case "$base" in
+    *.sh)
+      printf '/usr/local/bin/%s\n' "$base"
+      ;;
+    *.service|*.timer|*.socket|*.path|*.mount|*.target)
+      printf '/etc/systemd/system/%s\n' "$base"
+      ;;
+    *.cron)
+      # run-parts and cron.d ignore filenames containing a dot, so the deployed
+      # name is the stem; the dotted name is tried second just in case.
+      stem="${base%.cron}"
+      printf '/etc/cron.d/%s\n/etc/cron.daily/%s\n/etc/cron.d/%s\n/etc/cron.daily/%s\n' \
+        "$stem" "$stem" "$base" "$base"
+      ;;
+    *.*)
+      # Unknown extension: no convention to resolve it against.
+      ;;
+    *)
+      # Extensionless: apt.conf.d fragments (50unattended-upgrades, 02periodic),
+      # cron fragments, or a plain script in /usr/local/bin.
+      printf '/etc/apt/apt.conf.d/%s\n/etc/cron.d/%s\n/etc/cron.daily/%s\n/usr/local/bin/%s\n' \
+        "$base" "$base" "$base" "$base"
+      ;;
+  esac
+}
+
+# Files in <machine>/TOOLS worth comparing (skip placeholders and docs).
+tool_files() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -maxdepth 1 -type f -print |
+    while IFS= read -r f; do
+      case "$(basename -- "$f")" in
+        .gitkeep|README*.md|README*.MD) continue ;;
+      esac
+      printf '%s\n' "$f"
+    done | sort
+}
+
+# ---------------------------------------------------------------------------
 # Remote probe. One SSH round trip per machine, read-only commands only.
 # ---------------------------------------------------------------------------
+# remote_probe <alias> <n_units> <unit>... <toolspec>...
+# A toolspec is "<name>|<candidate path>|<candidate path>...": the remote side
+# reports the FIRST candidate that exists plus its sha256. Nothing is written.
 remote_probe() {
   local alias="$1"; shift
   local args=""
@@ -307,6 +390,17 @@ remote_probe() {
   ssh "${SSH_OPTS[@]}" "$alias" "bash -s --$args" <<'REMOTE' 2>/dev/null
 set -u
 p() { printf '%s\t%s\n' "$1" "$2"; }
+
+# Positional args: <n_units> <unit>... then the tool specs.
+n_units=${1:-0}
+shift || true
+units=""
+i=0
+while [ "$i" -lt "$n_units" ]; do
+  units="$units $1"
+  shift
+  i=$((i + 1))
+done
 
 p HOSTNAME "$(hostname 2>/dev/null || echo unknown)"
 
@@ -347,9 +441,34 @@ else
   p HAS_DOCKER no
 fi
 
-for unit in "$@"; do
+for unit in $units; do
   st=$(systemctl is-active "$unit" 2>/dev/null || true)
   printf 'SVC\t%s\t%s\n' "$unit" "${st:-unknown}"
+done
+
+# TOOLS/ deployment check. Read-only: resolve the first candidate path that
+# exists and checksum it. Nothing is copied, moved or written either way.
+for spec in "$@"; do
+  tname=${spec%%|*}
+  rest=${spec#*|}
+  found=""
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"|"*) cand=${rest%%|*}; rest=${rest#*|} ;;
+      *)     cand=$rest; rest="" ;;
+    esac
+    [ -z "$cand" ] && continue
+    if [ -f "$cand" ]; then found=$cand; break; fi
+  done
+  if [ -z "$found" ]; then
+    printf 'TOOL\t%s\t\t\n' "$tname"
+    continue
+  fi
+  sum=$(sha256sum "$found" 2>/dev/null | awk '{print $1}')
+  if [ -z "$sum" ]; then
+    sum=$(sudo -n sha256sum "$found" 2>/dev/null | awk '{print $1}')
+  fi
+  printf 'TOOL\t%s\t%s\t%s\n' "$tname" "$found" "${sum:-unreadable}"
 done
 
 echo "PROBE_END"
@@ -559,8 +678,35 @@ if (( ! OFFLINE )); then
     fi
 
     mapfile -t units < <(state_units "$s")
+
+    # TOOLS/ specs: "<basename>|<candidate>|<candidate>..." (no candidates =>
+    # unmappable, reported locally without bothering the remote host).
+    tool_specs=()
+    declare -A LOCAL_SUM=()
+    while IFS= read -r tf; do
+      [[ -n "$tf" ]] || continue
+      tb="$(basename -- "$tf")"
+      mapfile -t cands < <(tool_candidates "$tb")
+      if (( ${#cands[@]} == 0 )); then
+        report UNMAPPED "$name" "TOOLS/$tb" "" \
+          "no known deployed location for this basename" \
+          "not compared; add a mapping in tool_candidates() if it is deployed somewhere"
+        continue
+      fi
+      LOCAL_SUM["$tb"]="$(sha256sum "$tf" | awk '{print $1}')"
+      spec="$tb"
+      for c in "${cands[@]}"; do spec="$spec|$c"; done
+      tool_specs+=("$spec")
+    done < <(tool_files "${M_DIR[$name]}/TOOLS")
+
+    # Build the arg vector by hand: "${arr[@]:-}" on an empty array yields one
+    # empty argument, which would shift the unit count out of alignment.
+    probe_args=("${#units[@]}")
+    (( ${#units[@]} > 0 )) && probe_args+=("${units[@]}")
+    (( ${#tool_specs[@]} > 0 )) && probe_args+=("${tool_specs[@]}")
+
     out="$PROBE_TMP/$name.probe"
-    if ! remote_probe "$alias" "${units[@]:-}" > "$out" || ! grep -q '^PROBE_END$' "$out"; then
+    if ! remote_probe "$alias" "${probe_args[@]}" > "$out" || ! grep -q '^PROBE_END$' "$out"; then
       if [[ "${M_STATUS[$name]}" == "running" ]]; then
         report DRIFT "$name" "reachability" "running" "unreachable" "ssh to the documented alias failed"
       else
@@ -620,6 +766,31 @@ if (( ! OFFLINE )); then
       [[ "$st" == "active" ]] || \
         report DRIFT "$name" "service:$unit" "active" "$st" "unit named in STATE.md ## Services"
     done < <(grep '^SVC	' "$out" || true)
+
+    # ---- TOOLS/ vs deployed copies -------------------------------------------
+    # Read-only comparison. The tool never copies in either direction and never
+    # names a winner: on hef-proxmox the DEPLOYED copy is the correct one and the
+    # repo snapshot is the dangerous one, which is the opposite of the intuition.
+    while IFS=$'	' read -r _ tname tpath tsum; do
+      [[ -z "${tname:-}" ]] && continue
+      lsum="${LOCAL_SUM[$tname]:-}"
+      if [[ -z "$tpath" ]]; then
+        report DRIFT "$name" "TOOLS/$tname" "sha256:${lsum:0:12} (repo)" \
+          "deployed counterpart missing" \
+          "none of the candidate paths exist on the host"
+        continue
+      fi
+      if [[ "$tsum" == "unreadable" || -z "$tsum" ]]; then
+        report WARN "$name" "TOOLS/$tname" "sha256:${lsum:0:12} (repo)" \
+          "could not checksum $tpath" "not readable by the tuneladora user"
+        continue
+      fi
+      if [[ "$tsum" != "$lsum" ]]; then
+        report DRIFT "$name" "TOOLS/$tname" "sha256:${lsum:0:12} (repo)" \
+          "repo copy differs from $tpath" \
+          "deployed sha256:${tsum:0:12}; which copy is authoritative is a human decision"
+      fi
+    done < <(grep '^TOOL	' "$out" || true)
 
     # ---- hypervisor guests ---------------------------------------------------
     if [[ "$(get HAS_PCT)" == "yes" ]]; then
@@ -761,13 +932,19 @@ else
     for i in "${!F_SEV[@]}"; do
       case "${F_SEV[$i]}" in
         DRIFT)
-          printf "DRIFT %s %s: documented='%s' actual='%s'" \
-            "${F_MACHINE[$i]}" "${F_FIELD[$i]}" "${F_DOC[$i]}" "${F_ACT[$i]}"
+          if [[ "${F_FIELD[$i]}" == TOOLS/* ]]; then
+            # These read as a sentence: the interesting part is which deployed
+            # path differs, not a documented-vs-actual pair.
+            printf 'DRIFT %s %s: %s' "${F_MACHINE[$i]}" "${F_FIELD[$i]}" "${F_ACT[$i]}"
+          else
+            printf "DRIFT %s %s: documented='%s' actual='%s'" \
+              "${F_MACHINE[$i]}" "${F_FIELD[$i]}" "${F_DOC[$i]}" "${F_ACT[$i]}"
+          fi
           [[ -n "${F_NOTE[$i]}" ]] && printf '  (%s)' "${F_NOTE[$i]}"
           printf '\n'
           ;;
         *)
-          printf '%-5s %s %s: %s' "${F_SEV[$i]}" "${F_MACHINE[$i]}" "${F_FIELD[$i]}" "${F_ACT[$i]}"
+          printf '%-8s %s %s: %s' "${F_SEV[$i]}" "${F_MACHINE[$i]}" "${F_FIELD[$i]}" "${F_ACT[$i]}"
           [[ -n "${F_NOTE[$i]}" ]] && printf '  (%s)' "${F_NOTE[$i]}"
           printf '\n'
           ;;

@@ -87,18 +87,39 @@ not exist yet. Never rewrite a file you have not read in this session.
 - If the incoming entry is missing a field, add the field with an honest value
   (`**Rollback:** not applicable — read-only`, `**Notes:** none`). Do not silently
   drop fields.
-- If the log has grown past the rotation threshold, do **not** trim it by hand — say
-  so and recommend `tools/rotate_tasklog.sh`, which moves old entries to
-  `vault/archive/`.
+- `03_TASK_LOG.md` holds the **5 most recent entries only** (`SPEC.md §4`;
+  `validate.sh` WARNs above that). If your append takes it past 5, do **not** trim it
+  by hand — say so and recommend the rotation tool, which moves the older entries to
+  `vault/archive/YYYY-QN.md`:
+  ```bash
+  ./tools/rotate_tasklog.sh --machine <name> [--keep 5] [--dry-run]
+  ```
+  Those are the only flags it has; a bare positional name is rejected.
 
 ### STATE.md — the single source of truth
 
 `STATE.md` owns `machine, type, parent, container_id, connection, ssh_alias, ip,
 ip_assignment, status, os, depends_on, provides_to, backups, auto_updates,
-last_reconciled`. There is no `children` key — the folder tree is the topology.
+last_reconciled` — all required, in that canonical order (`SPEC.md §1.1`). There is no
+`children` key; the folder tree is the topology, and `validate.sh` FAILs if one appears.
+
+The enums are closed. Writing anything else is an immediate FAIL:
+
+| Key | Allowed values |
+|-----|----------------|
+| `type` | `bare-metal` `vm` `lxc` `docker` |
+| `connection` | `direct` `proxyjump` `docker-exec` |
+| `ip_assignment` | `static` `dhcp` `none` |
+| `status` | `running` `stopped` `unknown` |
+
+`backups` and `auto_updates` are nested mappings, never a bare string:
+`backups: {configured, destination, last_verified}`,
+`auto_updates: {configured, tool, schedule}`. `depends_on`/`provides_to` are lists of
+`{machine, role, detail}` mappings whose `machine:` must resolve to a real machine
+folder; empty is `[]`.
 
 - Patch **only** the fields listed in the update. Leave key order and the rest of the
-  frontmatter untouched.
+  frontmatter untouched — reordering keys is a WARN.
 - **Do not duplicate a STATE.md fact into prose anywhere else.** If an IP, a status, a
   parent or a dependency changes, it changes in `STATE.md` and nowhere else. When you
   see an update that would restate one of those fields in `01_SYSTEM_INFO.md`,
