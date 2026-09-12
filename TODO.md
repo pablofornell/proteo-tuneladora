@@ -16,6 +16,27 @@ Repository-level follow-ups only. **Per-machine issues do not live here.**
 
 ## Open, repo-level
 
+- **Tuneladora needs a real secret-management system.** *(Operator decision, 2026-09-12 —
+  build this.)* Today the arrangement is deliberate but minimal: the live value stays in
+  the machine's own config file, the vault records only **where** it lives, and a
+  `PreToolUse` hook blocks writing a value into `machines/**` (`SPEC.md §5`). That stops
+  the leak the audit found, but it is not management. Nothing can answer "what is the
+  RCON password", "when was it last changed", or "which machines share a credential", and
+  a rotation is a hand-run script with the new values printed once to a terminal.
+
+  What it should become: a secret store as the single source of truth — `pass`, Bitwarden
+  or the system keyring via `secret-tool` — with `STATE.md` and the vault referencing a
+  stable **secret ID** rather than a filesystem path, so moving a config file does not
+  strand the pointer. Tuneladora would read a secret only when a task needs it, write it
+  only into the target machine, and log the rotation date, never the value. Worth pairing
+  with the existing `05_SECURITY.md` note per machine so age and reuse become visible.
+
+  Precondition, still outstanding: five credentials were redacted from
+  `machines/hef-proxmox/CTs/LXC/hef-pzserver/` on 2026-09-12 and **have not been
+  rotated** — redaction is not rotation, and all five are still valid. See that machine's
+  `STATE.md § Open Issues`. The operator chose to defer this until WAHA and the PZ server
+  are next started, since both are down and nothing can be verified while they are.
+
 - **A UI.** Some way to see the fleet — machines, status, open issues, last reconcile —
   without reading markdown by hand. `tools/reconcile.sh --json` already emits
   machine-readable output, so a read-only dashboard over that is the cheapest first
