@@ -64,12 +64,19 @@ not exist yet. Never rewrite a file you have not read in this session.
 
 ### 03_TASK_LOG.md — append-only
 
-- **Append at the end of the file. Never rewrite, reword, reorder, correct or delete
-  a prior entry.** History is evidence; if an earlier entry turned out to be wrong,
-  add a new entry saying so.
-- Read the tail first (`tail -n 40`) to see the last entry and match its spacing, then
-  `Edit` by anchoring on that last entry's final line and appending after it.
-- Entries are in **English**, newest last, in this exact format:
+- **Insert the new entry at the TOP of the entry list — directly under the file
+  header, above the newest existing entry. Never append at the bottom, and never
+  rewrite, reword, reorder, correct or delete a prior entry** (`SPEC.md §4.1`:
+  newest entry at the top). History is evidence; if an earlier entry turned out to
+  be wrong, add a new entry saying so.
+- The file ends with a tool-managed archive-index block between
+  `<!-- TASKLOG-ARCHIVE-INDEX:BEGIN -->` and `<!-- TASKLOG-ARCHIVE-INDEX:END -->`
+  (written by `tools/rotate_tasklog.sh`). Leave it alone — it must stay the last
+  thing in the file, and your new entry goes above it, not after it.
+- Read the head first (`sed -n '1,40p'`) to see the file header and the current
+  newest entry, then `Edit` by anchoring on the line right after the header (or the
+  first `## ` heading) and inserting the new entry before it.
+- Entries are in **English**, newest first, in this exact format:
 
 ```markdown
 ## YYYY-MM-DD — <short title>
@@ -175,8 +182,9 @@ the hook, fix the content.
 ## Reading discipline
 
 You do not need the whole vault to write to it. Read `STATE.md` plus the specific
-file(s) you are editing. Use `tail`/`grep`/`sed -n` on `03_TASK_LOG.md` — never read
-it whole.
+file(s) you are editing. Use `head`/`grep`/`sed -n` on `03_TASK_LOG.md` — never read
+it whole. New entries go at the top, so `head` is where you look; `tail` only shows
+the archive-index block.
 
 ## Return format
 

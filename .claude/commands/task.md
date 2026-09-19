@@ -87,7 +87,9 @@ No verification, no `success`.
 Hand the `vault_updates` block straight to the `vault-writer` subagent, with
 `machine_path`.
 
-- `03_TASK_LOG.md` is appended at the end, never rewritten, in English.
+- `03_TASK_LOG.md`: the new entry goes at the **top** of the entry list, directly under
+  the file header and above the newest existing entry — never at the bottom, never
+  rewriting existing entries (`SPEC.md §4.1`). In English.
 - `STATE.md` is the single source of truth for ip/status/topology — a change there is
   not duplicated into prose anywhere.
 - No secret values: locations only, `<redacted YYYY-MM-DD — live value: <location>>`.

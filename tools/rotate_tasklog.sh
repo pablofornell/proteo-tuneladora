@@ -289,8 +289,8 @@ rotate_one() {
 
   # ---- 3. Decide what stays and what moves ------------------------------------
   # "Most recent" is decided by the date in the heading, not by file position:
-  # these logs are appended to out of order. Ties break on file position (later
-  # position wins, which is the append-only convention).
+  # these logs are appended to out of order. Ties break on file position — the
+  # entry nearer the TOP of the file wins (SPEC.md §4.1: newest entry at the top).
   local keepset="$wd/keep.txt" dated="$wd/dated.tsv"
   : > "$keepset"
   : > "$dated"
@@ -304,7 +304,9 @@ rotate_one() {
       printf '%s\t%d\n' "${e_date[i]}" "$i" >> "$dated"
     fi
   done
-  sort -t$'\t' -k1,1r -k2,2nr "$dated" | head -n "$KEEP" | cut -f2 >> "$keepset"
+  # Entries are indexed top-to-bottom (i=1 is the topmost), so ties on date sort
+  # ascending on index to prefer the one nearer the top.
+  sort -t$'\t' -k1,1r -k2,2n "$dated" | head -n "$KEEP" | cut -f2 >> "$keepset"
 
   local -A KEEPMAP=()
   while read -r i; do [[ -n "$i" ]] && KEEPMAP["$i"]=1; done < "$keepset"
@@ -519,7 +521,7 @@ rotate_one() {
       # shellcheck disable=SC2016  # literal backticks for markdown code spans.
       printf 'Example: `grep -n "2026-05" machines/%s/vault/archive/*.md`\n' "$mrel"
       printf '\n'
-      printf 'New entries may be appended above or below this block — the rotator handles both.\n'
+      printf 'New entries go at the TOP of the log (SPEC.md §4.1), never below this block.\n'
     else
       printf 'No archived entries yet.\n'
     fi
