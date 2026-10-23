@@ -7,10 +7,18 @@ memory of every machine under `machines/`.
 - [`SPEC.md`](SPEC.md) — canonical structure: file set, vault numbering, `STATE.md`
   schema, reading tiers, rotation, redaction, linking. Read it first.
 - [`CLAUDE.md`](CLAUDE.md) — operating rules for the agent.
+- [`AGENTS.md`](AGENTS.md) — agent entry point and standing saved-key SSH policy.
 - [`workflows/`](workflows/) — onboarding procedures.
 - [`REFERENCES.md`](REFERENCES.md) — naming conventions and links.
 
 ## SSH setup
+
+Configured machine aliases are ready for autonomous use: the agent connects with
+the saved dedicated key without asking for a password, keyring unlock or another
+connection approval. Management aliases disable interactive authentication and use
+the key file directly; the exact settings are in [`CLAUDE.md`](CLAUDE.md).
+
+The onboarding steps below apply when working saved access does not exist yet.
 
 Tuneladora operates through a dedicated `tuneladora` user on each server — never your
 personal user, never `root`. That keeps a clean audit trail and separates daily work from
@@ -69,7 +77,7 @@ via `pct exec` on the parent, which lets the agent do it with no human step at a
 
 ### Phase 2 — tell Tuneladora to take over
 
-> **"Initialize hef-pam"** — or `/add-machine hef-pam`
+> **"Initialize web-prod"** — or `/add-machine web-prod`
 
 Tuneladora then:
 
@@ -91,6 +99,7 @@ The full procedure, including the lost-key recovery path, is in
 
 ```
 SPEC.md                            # canonical structure — the authority
+AGENTS.md                          # agent entry point and saved-key SSH policy
 CLAUDE.md                          # agent operating rules
 CONTEXT.md / REFERENCES.md / TODO.md
 tools/                             # scaffolding, validation, reconciliation, rotation

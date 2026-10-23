@@ -11,6 +11,9 @@ Structure is specified in [`SPEC.md`](SPEC.md); operating behaviour in
 
 ## What good looks like
 
+- **Saved SSH access is autonomous.** Configured aliases use dedicated keys
+  directly without password/keyring prompts or repeated connection approval.
+  Failed connections are diagnosed and recorded; machine reachability is verified.
 - **Reading is tiered.** L1 (`STATE.md` + machine `CLAUDE.md`, under ~4 KB) before every
   action; L2 only when the task touches a service, config or package; L3 only by `grep`,
   for investigation. Context cost scales with the task, not with the machine's history.

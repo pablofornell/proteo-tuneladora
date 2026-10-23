@@ -33,6 +33,15 @@ and escalate only when the task demonstrably requires it.
 
 - Never connect as `root`; use the `tuneladora` user, escalate with `sudo`. Editing
   `~/.ssh/config` is allowed during setup and migration.
+- Use saved management keys without interactive password or keyring prompts. Keep
+  dedicated keys passphrase-free and mode `0600`; use `IdentityAgent none`,
+  `IdentitiesOnly yes`, `BatchMode yes` and `AddKeysToAgent no` for these aliases,
+  with `PasswordAuthentication no` and `KbdInteractiveAuthentication no`.
+  A configured SSH connection is standing authorization to connect for the user's
+  task; do not ask again just to use it. If noninteractive access fails, diagnose
+  the connection and use a documented parent fallback where available. Do not ask
+  the user for saved-key passwords or keyring unlocks; record any unavailable
+  endpoint or missing bootstrap access instead of inventing a connection.
 - Manage container lifecycle through the **parent**, never the child's own connection.
   Docker commands run as the container's default user; record it in `STATE.md`.
 - Never hardcode LAN subnets. Before applying an SSH `from=` restriction, discover with

@@ -119,6 +119,10 @@ drift finding you report.
 
 1. Read `ssh_alias` from `STATE.md`.
 2. Run: `ssh <alias> "<command>"` — one clearly-scoped command per invocation.
+   Existing configured aliases authorize ordinary access for the requested task.
+   Use the saved key noninteractively under the root `CLAUDE.md` SSH policy;
+   never ask the operator for a password, passphrase or keyring unlock. Diagnose
+   failures and use the documented parent fallback rather than prompting.
 3. **Check the exit code every time.** Do not infer success from output text:
    ```bash
    ssh <alias> "systemctl is-active caddy"; echo "exit=$?"

@@ -29,7 +29,7 @@ machines/
     │   └── archive/2026-Q3.md          # rotated-out task-log entries
     ├── TOOLS/
     ├── VMs/
-    │   └── hef-pam/                    # same layout, recursively
+    │   └── Windows10x64/                    # same layout, recursively
     └── CTs/
         └── LXC/
             ├── hef-net/                # same layout, recursively
@@ -56,7 +56,7 @@ or [`ADD_NAS.md`](workflows/ADD_NAS.md).
 ## Naming conventions
 
 - **Machine names:** lowercase, hyphens as separators — `web-prod`, `db-staging`,
-  `hef-pam`. The folder name and `STATE.md`'s `machine:` value must match.
+  `hef-net`. The folder name and `STATE.md`'s `machine:` value must match.
 - **Vault notes:** two-digit numeric prefix, uppercase name — `06_BACKUPS.md`.
   Numbers are **fixed by name, globally** (`SPEC.md §2`), whether or not the file exists
   on a given machine: `08` is always `CONTAINERS`, `09` is always `TROUBLESHOOTING`. A
