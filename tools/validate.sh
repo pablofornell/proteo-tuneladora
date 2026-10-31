@@ -488,10 +488,19 @@ check_l1_budget() {
 # obvious "fill this in" placeholders used throughout the templates.
 SECRET_EXEMPT_RE='<redacted|ssh-ed25519 AAAA|ssh-rsa AAAA|ssh-dss AAAA|ecdsa-sha2-nistp[0-9]+ AAAA|\$2[aby]\$|\$6\$|\(TBD\)|<[A-Za-z_][A-Za-z0-9_ -]*>|\$\{[A-Za-z_]|[Rr][Ee][Dd][Aa][Cc][Tt][Ee][Dd]'
 
-# Each entry is: <regex> TAB <label> TAB <extra per-pattern exemption regex>
+# Each entry is: <regex> TAB <label> TAB <per-pattern mask regex>
+# The mask (ERE, no '#') replaces known-harmless text in a hit with a space
+# before the pattern is tested again, so the rest of the line is still scanned.
+# For hex strings: URLs, and digests whose standalone label (sha1/sha256/…, md5,
+# commit, revision) is followed by exactly that algorithm's length — task-log
+# verification records these routinely. Anything longer, unlabelled, or with
+# the label glued to a longer name (WEBHOOK_SHA256=…) is still flagged.
+# A "SHA-256 pins:" list of <name> <64-hex> pairs is also masked.
+# For passwords: an empty key in a code span (`Password=`) names where the value
+# lives and holds no value; `Password=<anything>` is still flagged.
 SECRET_PATTERNS=(
-  $'\\b[0-9a-fA-F]{32,}\\b\t32+ char hex string (possible key/hash)\thttps?://'
-  $'[Pp]assword[[:space:]]*=[[:space:]]*[^[:space:]]+\tpassword assignment\t'
+  $'\\b[0-9a-fA-F]{32,}\\b\t32+ char hex string (possible key/hash)\thttps?://[^[:space:])>"\'`,;|]*|(^|[^0-9A-Za-z_])(([Ss][Hh][Aa]-?1|[Cc]ommit|[Rr]evision)[[:space:]:=`]+[0-9a-fA-F]{40}|[Ss][Hh][Aa]-?224[[:space:]:=`]+[0-9a-fA-F]{56}|[Ss][Hh][Aa]-?256[[:space:]:=`]+[0-9a-fA-F]{64}|[Ss][Hh][Aa]-?384[[:space:]:=`]+[0-9a-fA-F]{96}|[Ss][Hh][Aa]-?512[[:space:]:=`]+[0-9a-fA-F]{128}|[Mm][Dd]5[[:space:]:=`]+[0-9a-fA-F]{32})([^0-9A-Za-z_]|$)|[Ss][Hh][Aa]-?256 pins:[*]*([[:space:]]*[A-Za-z0-9_.-]+[[:space:]]+[0-9a-fA-F]{64}([^0-9A-Za-z_]|$))+'
+  $'[Pp]assword[[:space:]]*=[[:space:]]*[^[:space:]]+\tpassword assignment\t[Pp]assword[[:space:]]*=`([^0-9A-Za-z_]|$)'
   $'api[_-]?key["\':= ]+[^[:space:]]{16,}\tapi key assignment\t'
   $'-----BEGIN .* PRIVATE KEY-----\tprivate key block\t'
   $'token["\':= ]+[^[:space:]]{20,}\ttoken assignment\t'
@@ -499,20 +508,23 @@ SECRET_PATTERNS=(
 
 check_secrets() {
   local root="$1"
-  local files=() f entry pat label extra hits found=0
+  local files=() f entry pat label extra hits masked found=0
   while IFS= read -r f; do files+=("$f"); done \
     < <(find "$root" -name '.git' -prune -o -type f -name '*.md' -print | sort)
   [[ ${#files[@]} -gt 0 ]] || return 0
 
   for entry in "${SECRET_PATTERNS[@]}"; do
     IFS=$'\t' read -r pat label extra <<< "$entry"
-    if [[ -n "$extra" ]]; then
-      hits="$(grep -InE -- "$pat" "${files[@]}" 2>/dev/null \
-        | grep -vE -- "$SECRET_EXEMPT_RE" \
-        | grep -vE -- "$extra" || true)"
-    else
-      hits="$(grep -InE -- "$pat" "${files[@]}" 2>/dev/null \
-        | grep -vE -- "$SECRET_EXEMPT_RE" || true)"
+    hits="$(grep -HInE -- "$pat" "${files[@]}" 2>/dev/null \
+      | grep -vE -- "$SECRET_EXEMPT_RE" || true)"
+    if [[ -n "$extra" && -n "$hits" ]]; then
+      # Fail closed: a broken mask must not silently empty the hit list.
+      if masked="$(sed -E "s#${extra}# #g" <<< "$hits" 2>/dev/null)"; then
+        hits="$(grep -E -- "$pat" <<< "$masked" || true)"
+      else
+        report FAIL "tools/validate.sh" "secret-scan mask for '$label' is not a valid sed ERE"
+        found=1
+      fi
     fi
     [[ -n "$hits" ]] || continue
     while IFS= read -r f; do
