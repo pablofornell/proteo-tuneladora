@@ -50,6 +50,13 @@ This is enforced, not just advised: `ci-register-runner` refuses a repo that is 
 `workflow_dispatch` or whose repo is not private. Never make a runner-backed repo public
 without removing its runner first.
 
+**When a private repo goes public**, move it to the poller and remove **both** the runner
+and `.github/workflows/deploy.yml`. Left in place, the workflow creates a run on every push
+that no runner picks up, so runs sit `queued` or `pending` and the repo looks undeployable
+while the poller is deploying normally. A commit that changes only `.github/` is recorded
+without a deploy. On a public repo, judge a deploy by `ci-deploy-run status <app>` on the
+Docker host, not by the Actions UI.
+
 ---
 
 ## Step 2 — Write the recipe (kit, workstation)
@@ -186,6 +193,29 @@ health-checks it. `:previous` only appears from the second deploy. If the *first
 unhealthy there is nothing to roll back to: the run ends with exit 2 and
 `ROLLBACK IMPOSSIBLE` (the `:deployed` tag stays on the failed image). Fix the cause, push
 again; do not hand-edit tags.
+
+**Stateful apps and secrets** (the example above is a static site; first used by
+`sotel-autoclock`, 2026-11-13):
+
+- **Data:** bind-mount `./data` under `<dir>`, never a named volume: `BACKUP=tar` with
+  `BACKUP_PATHS=data` can only see paths under `DIR`. Create `data/` owned by the image's
+  uid (`install -d -o <uid> -g <uid> -m 700`), as the kairos app does.
+- **Secrets:** files under `<dir>/secrets/` (directory `root 0700`, each file
+  `<uid>:<uid> 0400`) passed as compose `secrets:` and read through `*_FILE` variables; a
+  non-secret `env_file` at `root 0600`. Send values over SSH stdin (`sudo -n tee`), never as
+  arguments, and compare `sha256sum` on both ends instead of printing them. Record only the
+  location in the vault.
+- **Smoke test:** a non-nginx image has no `-t`. Run the binary's `--help` (or the kairos
+  `--entrypoint` pattern) under the same production flags in `build.sh`.
+- **Health URLs:** an app with its own login needs an unauthenticated `/healthz`, and `/`
+  must return 200 without a session (a login page is fine). If the app checks the `Host`
+  header, allow `127.0.0.1:<port>` (the health check) and the proxy name.
+- **Must run after every boot** (for example, a service that acts on a schedule): use
+  `restart: always`, not `unless-stopped`, and confirm `docker.service` is enabled and the
+  Proxmox guest has `onboot: 1`.
+- **Status page:** when the repo name differs from the app name, add `<app> <runner-dir>` to
+  `<ci-kit>/hef-ci/status/runners.map` and install only that file on the CI host (atomic
+  `install` + `mv`, compare `sha256sum`). Re-running `status/install.sh` is not needed.
 
 ---
 
